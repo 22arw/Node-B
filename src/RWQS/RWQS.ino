@@ -2,10 +2,10 @@
  *  Remote Water Quality Sensor
  *  Node B
  *  Author: Derek Schrag
- *  Last Updated: 2/28/2021
+ *  Last Updated: 3/11/2021
  *  
  *  TODO: Implement Gateway communication (authentication, uplink/downlink frames)
- *        Implement GPS (communication, formatting, transmission; Uses TinyGPS+ https://github.com/mikalhart/TinyGPSPlus) 
+ *        Implement GPS (communication, formatting, transmission; Uses TinyGPS++ https://github.com/mikalhart/TinyGPSPlus) 
  *        Recalibrate PHSLOPE
  *        Rethink usage of delimitters in packet string
  */
@@ -13,15 +13,21 @@
 #include <SPI.h>      // Arduino lib for serial communications
 #include <OneWire.h>  // Temperature Sensor lib
 #include <RH_RF95.h>  // LoRa lib
+#include <TinyGPS++.h>  // GPS lib
+#include <SoftwareSerial.h> // Serial lib for serial over RX & TX pins
 
-#define PHSensorPin A1	// Data pins for sensors
-#define TdsSensorPin A2
-#define TempSensorPin A0
+#define PHSENSORPIN A1	// Data pins for sensors
+#define TDSSENSORPIN A2
+#define TEMPSENSORPIN A0
+
+#define RXPIN 0
+#define TXPIN 1
+#define GPSBAUDRATE 9600  // Baud rate 9600 for use with NEO-6M GPS module
 
 #define VREF 3.3	// Arduino Output Voltage
 #define SCOUNT 30	
 
-#define Offset 0	// Offset for PH calculation
+#define OFFSET 0	// Offset for PH calculation
 #define PHSLOPE 5.3846	// Calculated slope for PH value calulation
 
 #define RFM95_CS 8
@@ -35,7 +41,16 @@
 // Singleton instance of the radio driver
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-int tempPin = TempSensorPin;
+//TinyGPS++ object
+TinyGPSPlus gps;
+
+static const int RX = RXPIN;
+static const int TX = TXPIN;
+static const uint32_t GPSBAUD = GPSBAUDRATE;
+
+SoftwareSerial ss(RX, TX);
+
+int tempPin = TEMPSENSORPIN;
 
 // Instance of the temperature sensor
 OneWire ds(tempPin);
@@ -145,12 +160,13 @@ void setup()
   digitalWrite(RFM95_RST, HIGH);
 
   // Set sensor pins to read
-  pinMode(TdsSensorPin, INPUT);
-  pinMode(TempSensorPin, INPUT);
-  pinMode(PHSensorPin, INPUT);
+  pinMode(TDSSENSORPIN, INPUT);
+  pinMode(TEMPSENSORPIN, INPUT);
+  pinMode(PHSENSORPIN, INPUT);
 
-  // Baud rate 115200 for all sensors
+  // Baud rate 115200 for all sensors; 9600 for GPS module
   Serial.begin(115200);
+  ss.begin(GPSBAUD);
   delay(100);
  
   Serial.println("Starting up...");
@@ -195,18 +211,18 @@ void loop()
   if(millis() - analogSampleTimepoint > 3000U)  
   {
     analogSampleTimepoint = millis();
-    analogBuffer[analogBufferIndex] = analogRead(TdsSensorPin);
+    analogBuffer[analogBufferIndex] = analogRead(TDSSENSORPIN);
     analogBufferIndex++;
 
     if(analogBufferIndex == SCOUNT)
       analogBufferIndex = 0;
 
     if(cnt < 10)
-      pHBuff[cnt] = analogRead(PHSensorPin);
+      pHBuff[cnt] = analogRead(PHSENSORPIN);
     else
     {
       cnt = 0;
-      pHBuff[cnt] = analogRead(PHSensorPin);
+      pHBuff[cnt] = analogRead(PHSENSORPIN);
     }
   }
 
@@ -256,7 +272,7 @@ void loop()
       
     // Calculate voltage reading from PH sensor, then calculate actual PH value.
     float phVolt = (float) avgValuePH * 3.3 / 1024 / 6;
-    float phValue = PHSLOPE * phVolt + Offset;
+    float phValue = PHSLOPE * phVolt + OFFSET;
   
     Serial.println("Transmitting..."); // Send a message to rf95_server
     digitalWrite(LED, HIGH);

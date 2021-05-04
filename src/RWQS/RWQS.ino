@@ -189,7 +189,7 @@ void loop()
 
   // Every 60000 milliseconds (60 seconds) take a TDS and PH reading
   // We are taking a rolling average of these readings (30 for TDS, 10 for PH)
-  if(millis() - analogSampleTimepoint > 60U)  
+  if(millis() - analogSampleTimepoint > 60000U)  
   {
     // Read TDS value, increment buffer index
     analogSampleTimepoint = millis();
@@ -214,7 +214,7 @@ void loop()
   static unsigned long printSensorTimepoint = millis();
 
   // Every 3 600 000 milliseconds (60 minutes), gather all sensor information, format it, and transmitting it
-  if(millis() - printSensorTimepoint > 12000U)
+  if(millis() - printSensorTimepoint > 3600000U)
   {
     printSensorTimepoint = millis();
 
@@ -293,10 +293,10 @@ void loop()
   }
 
   // This will end up offsetting the GPS transmission and sensor data transmission by 30 minutes (1 800 000 ms)
-  static unsigned long gpsTimepoint = millis() - 6000U;
+  static unsigned long gpsTimepoint = millis() - 1800000U;
 
   // Every 3 600 000 milliseconds (60 minutes) get location data, format it, and transmit it.
-  if(millis() - gpsTimepoint > 12000U)
+  if(millis() - gpsTimepoint > 3600000U)
   {
     gpsTimepoint = millis();
     unsigned char radiopacket[20] = "";

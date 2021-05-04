@@ -2,71 +2,71 @@
  *  Remote Water Quality Sensor
  *  Node B
  *  Author: Derek Schrag
- *  Last Updated: 3/11/2021
- *  
- *  TODO: Implement Gateway communication (authentication, uplink/downlink frames)
- *        Implement GPS (communication, formatting, transmission; Uses TinyGPS++ https://github.com/mikalhart/TinyGPSPlus) 
- *        Recalibrate PHSLOPE
- *        Rethink usage of delimitters in packet string
+ *  Last Updated: 5/4/2021
  */
 
 #include <SPI.h>      // Arduino lib for serial communications
 #include <OneWire.h>  // Temperature Sensor lib
-#include <RH_RF95.h>  // LoRa lib
-#include <TinyGPS++.h>  // GPS lib
-#include <SoftwareSerial.h> // Serial lib for serial over RX & TX pins
+#include <TinyGPS++.h> // GPS lib
+#include <TinyLoRa.h> // LoRa lib
 
-#define PHSENSORPIN A1	// Data pins for sensors
-#define TDSSENSORPIN A2
-#define TEMPSENSORPIN A0
+// Sensor Pins
+#define PHSensorPin A1
+#define TdsSensorPin A2
+#define TempSensorPin A0
 
-#define RXPIN 0
-#define TXPIN 1
-#define GPSBAUDRATE 9600  // Baud rate 9600 for use with NEO-6M GPS module
-
-#define VREF 3.3	// Arduino Output Voltage
-#define SCOUNT 30	
-
-#define OFFSET 0	// Offset for PH calculation
-#define PHSLOPE 5.3846	// Calculated slope for PH value calulation
-
-#define RFM95_CS 8
-#define RFM95_RST 4
-#define RFM95_INT 7
+// Device Voltage, Constants for formulas
+#define VREF 3.3
+#define SCOUNT 30
+#define OFFSET -0.24
+#define PHSLOPE 0.0766666667
 #define LED 13
 
-// 900MHz
-#define RF95_FREQ 900.0
- 
-// Singleton instance of the radio driver
-RH_RF95 rf95(RFM95_CS, RFM95_INT);
+//*****************************************Gateway Connection Keys*****************************************
+// Application Key (MSB)
+//uint8_t Appkey[16] = { 0x72 0x46 0xdf 0xc8 0x75 0x12 0x7d 0x47 0x75 0x86 0xe5 0x67 0x34 0xdd 0x52 0x45 };
 
-//TinyGPS++ object
-TinyGPSPlus gps;
+// Network Session Key (MSB)
+uint8_t NwkSkey[16] = { 0xe8, 0x45, 0x82, 0xfc, 0x62, 0xb1, 0x4c, 0xa2, 0x64, 0xcd, 0x67, 0xe7, 0x86, 0xd4, 0x20, 0x01 };
 
-static const int RX = RXPIN;
-static const int TX = TXPIN;
-static const uint32_t GPSBAUD = GPSBAUDRATE;
+// Application Session Key (MSB)
+uint8_t AppSkey[16] = { 0x81, 0x83, 0x1d, 0x29, 0xc4, 0xb2, 0xd7, 0xbb, 0xb5, 0x5c, 0x6a, 0x6f, 0x1f, 0xc8, 0xc1, 0xac };
 
-SoftwareSerial ss(RX, TX);
+// Device Address (MSB)
+uint8_t DevAddr[4] = { 0x01, 0x81, 0x1e, 0xc2 };
+//*********************************************************************************************************
 
-int tempPin = TEMPSENSORPIN;
+//*****************************************Variable Setup**************************************************
+// Instance of lora radio with pins for Feather 32u4
+TinyLoRa lora = TinyLoRa(7, 8, 4);
+
+static const uint32_t GPSBaud = 9600;
+
+int tempPin = TempSensorPin;
 
 // Instance of the temperature sensor
 OneWire ds(tempPin);
 
+// Instance of our GPS object
+TinyGPSPlus gps;
+
+// Buffers, indices, and holding variables for sensor data
 int analogBuffer[SCOUNT];
 int analogBufferTemp[SCOUNT];
 int analogBufferIndex = 0, copyIndex = 0;
 float averageVoltage = 0, tdsValue = 0, tdstemperature = 25, temperature;
-char cBuff[6];
+char cBuff[10];
 int pHBuff[10];
 int cnt = 0;
 unsigned long int avgValuePH;
+//bool firstTime = 1;
+//**********************************************************************************************************
 
+//*****************************************Functions********************************************************
 // Returns the temperature from one DS18S20 in DEG Celsius
 // Source: https://wiki.dfrobot.com/Gravity__DS18B20_Temperature_Sensor__Arduino_Compatible__V2_SKU__DFR0024
-float getTemp(){
+float getTemp()
+{
 
   byte data[12];
   byte addr[8];
@@ -147,91 +147,76 @@ int getMedianNum(int bArray[], int iFilterLen)
 }
 
 // Rounds a given float to 2 decimal places and returns as a float
-float round(float var)
+float phRound(float var)
 {
   float v = (int) (var * 100 + .5);
   return (float) v / 100;
 }
+//**********************************************************************************************************
 
 void setup() 
 {
-  // Init & starts LoRa radio 
-  pinMode(RFM95_RST, OUTPUT);
-  digitalWrite(RFM95_RST, HIGH);
+  delay(3000);
 
   // Set sensor pins to read
-  pinMode(TDSSENSORPIN, INPUT);
-  pinMode(TEMPSENSORPIN, INPUT);
-  pinMode(PHSENSORPIN, INPUT);
+  pinMode(TdsSensorPin, INPUT);
+  pinMode(TempSensorPin, INPUT);
+  pinMode(PHSensorPin, INPUT);
 
-  // Baud rate 115200 for all sensors; 9600 for GPS module
+  // Baud rate 115200 for all sensors
   Serial.begin(115200);
-  ss.begin(GPSBAUD);
   delay(100);
+
+  // Begin serial for GPS
+  Serial1.begin(GPSBaud);
+
+  // Set LoRa parameters for transmission in US
+  lora.setChannel(CH2);
+  lora.setDatarate(SF7BW125);
+  if(!lora.begin())
+  {
+    Serial.println("Failed");
+    Serial.println("Check the radio");
+    while(true);
+  }
  
   Serial.println("Starting up...");
- 
-  // manual reset
-  digitalWrite(RFM95_RST, LOW);
-  delay(10);
-  digitalWrite(RFM95_RST, HIGH);
-  delay(10);
-
-  // Check for failure to initialize LoRa raido
-  while (!rf95.init()) {
-    Serial.println("LoRa radio init failed");
-    Serial.println("Uncomment '#define SERIAL_DEBUG' in RH_RF95.cpp for detailed debug info");
-    while (1);
-  }
-  Serial.println("LoRa radio init OK!");
- 
-  // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM
-  if (!rf95.setFrequency(RF95_FREQ)) {
-    Serial.println("setFrequency failed");
-    while (1);
-  }
-  Serial.print("Set Freq to: "); Serial.println(RF95_FREQ);
-  
-  // Defaults after init are 434.0MHz, 13dBm, Bw = 125 kHz, Cr = 4/5, Sf = 128chips/symbol, CRC on
- 
-  // The default transmitter power is 13dBm, using PA_BOOST.
-  // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then 
-  // you can set transmitter powers from 5 to 23 dBm:
-  rf95.setTxPower(23, false);
 }
- 
-int16_t packetnum = 0;  // packet counter, we increment per xmission
  
 void loop()
 {
   static unsigned long analogSampleTimepoint = millis();
 
-  // Every 3000 milliseconds take a TDS and PH reading
+  // Every 60000 milliseconds (60 seconds) take a TDS and PH reading
   // We are taking a rolling average of these readings (30 for TDS, 10 for PH)
-  if(millis() - analogSampleTimepoint > 3000U)  
+  if(millis() - analogSampleTimepoint > 60000U)  
   {
+    // Read TDS value, increment buffer index
     analogSampleTimepoint = millis();
-    analogBuffer[analogBufferIndex] = analogRead(TDSSENSORPIN);
+    analogBuffer[analogBufferIndex] = analogRead(TdsSensorPin);
     analogBufferIndex++;
 
+    // For rolling buffer
     if(analogBufferIndex == SCOUNT)
       analogBufferIndex = 0;
 
+    // Read pH value, rolling buffer
     if(cnt < 10)
-      pHBuff[cnt] = analogRead(PHSENSORPIN);
+      pHBuff[cnt] = analogRead(PHSensorPin);
     else
     {
       cnt = 0;
-      pHBuff[cnt] = analogRead(PHSENSORPIN);
+      pHBuff[cnt] = analogRead(PHSensorPin);
     }
   }
 
-  static unsigned long printTimepoint = millis();
+  // Time for broadcasting sensor data
+  static unsigned long printSensorTimepoint = millis();
 
-  // Every 6 000 000 milliseconds (10 minutes), gather all sensor information, format it, and transmitting it
-  if(millis() - printTimepoint > 6000000U)
+  // Every 3 600 000 milliseconds (60 minutes), gather all sensor information, format it, and transmitting it
+  if(millis() - printSensorTimepoint > 3600000U)
   {
-    printTimepoint = millis();
+    printSensorTimepoint = millis();
 
     // Copy over TDS values for use
     for(copyIndex = 0; copyIndex < SCOUNT; copyIndex++)
@@ -256,7 +241,7 @@ void loop()
     for(int i = 2; i < 8; i++)
       avgValuePH += pHBuff[i];
 
-    // Calculate average voltage for TDS value
+    // Calculate average voltage for TDS value (ignore TDS temperature, sensor didn't come with one)
     averageVoltage = getMedianNum(analogBufferTemp, SCOUNT) * (float)VREF / 1024.0;
     float compensationCoefficient = 1.0 + 0.02 * (tdstemperature - 25.0);
     float compensationVoltage = averageVoltage / compensationCoefficient;
@@ -271,14 +256,15 @@ void loop()
       temperature = getTemp();
       
     // Calculate voltage reading from PH sensor, then calculate actual PH value.
+    // Formula for pH: pH = PH7 + ((PH7_Voltage - Voltage) - pH_Slope) + Offset
     float phVolt = (float) avgValuePH * 3.3 / 1024 / 6;
-    float phValue = PHSLOPE * phVolt + OFFSET;
+    float phValue = 7 + ((1.13-phVolt) / -PHSLOPE) + OFFSET;
   
     Serial.println("Transmitting..."); // Send a message to rf95_server
     digitalWrite(LED, HIGH);
 
     // Data packet to be transmitted
-    char radiopacket[20] = "";
+    unsigned char radiopacket[20] = "";
     
     // Convert TDS value to string for packet, add to packet, delimit with :
     itoa(tdsValue, radiopacket, 10); 
@@ -290,31 +276,56 @@ void loop()
     strcat(radiopacket, ":");
 
     // Round PH value to 2 decimal places
-    phValue = round(phValue);
+    phValue = phRound(phValue);
     phValue = phValue * 100;
 
-    //Convert PH value to string for packet, add to packet, delimit with :
+    // Convert PH value to string for packet, add to packet, delimit with :
     itoa(int(phValue), cBuff, 10);
     strcat(radiopacket, cBuff);
-    strcat(radiopacket, ":");
-    
-    Serial.print("Sending "); Serial.println(radiopacket);
 
-    // Make packet null-terminated for LoRa
-    radiopacket[19] = 0;
-    
+    // Broadcast the packet over LoRa, increment frame counter
+    lora.sendData(radiopacket, sizeof(radiopacket), lora.frameCounter);
+    Serial.print("Frame Counter: ");
+    Serial.println(lora.frameCounter);
+    lora.frameCounter++;
     Serial.println("Sending...");
     delay(10);
-
-    // Transmit packet unto the void
-    rf95.send((uint8_t *)radiopacket, 20);
-   
-    Serial.println("Waiting for packet to complete..."); 
-    delay(10);
-
-    // Wait for confirmation of packet being received
-    // TODO: Change to work with Gateway communication (uplink/downlink frame tracking)
-    rf95.waitPacketSent();
-
   }
+
+  // This will end up offsetting the GPS transmission and sensor data transmission by 30 minutes
+  static unsigned long gpsTimepoint = millis() - 1800000U;
+
+  // Every 3 600 000 milliseconds (60 minutes) get location data, format it, and transmit it.
+  if(millis() - gpsTimepoint > 3600000U)
+  {
+    gpsTimepoint = millis();
+    unsigned char radiopacket[20] = "";
+    int gpsLatitude, gpsLongitude;
+    if(gps.encode(Serial1.read()))
+    {
+      if(gps.location.isValid())
+      {
+        // Multiply lat and long coords by 10,000 to essential save 4 decimal places
+        gpsLatitude = int(gps.location.lat() * 10000);
+        gpsLongitude = int(gps.location.lng() * 10000);
+
+        // Add latitude and longitude to the packet string, delimit with semi-colon ;
+        itoa(gpsLatitude, radiopacket, 10);
+        strcat(radiopacket, ';');
+
+        itoa(gpsLongitude, cBuff, 10);
+        strcat(radiopacket, cBuff);
+
+
+        // Broadcast the packet over LoRa, increment frame counter
+        lora.sendData(radiopacket, sizeof(radiopacket), lora.frameCounter);
+        Serial.print("Frame Counter: ");
+        Serial.println(lora.frameCounter);
+        lora.frameCounter++;
+        Serial.println("Sending...");
+        delay(10);
+      }
+    }
+  }
+  
 }

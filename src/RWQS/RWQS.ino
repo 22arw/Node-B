@@ -189,7 +189,7 @@ void loop()
 
   // Every 60000 milliseconds (60 seconds) take a TDS and PH reading
   // We are taking a rolling average of these readings (30 for TDS, 10 for PH)
-  if(millis() - analogSampleTimepoint > 60000U)  
+  if(millis() - analogSampleTimepoint > 60U)  
   {
     // Read TDS value, increment buffer index
     analogSampleTimepoint = millis();
@@ -214,7 +214,7 @@ void loop()
   static unsigned long printSensorTimepoint = millis();
 
   // Every 3 600 000 milliseconds (60 minutes), gather all sensor information, format it, and transmitting it
-  if(millis() - printSensorTimepoint > 3600000U)
+  if(millis() - printSensorTimepoint > 12000U)
   {
     printSensorTimepoint = millis();
 
@@ -256,7 +256,7 @@ void loop()
       temperature = getTemp();
       
     // Calculate voltage reading from PH sensor, then calculate actual PH value.
-    // Formula for pH: pH = PH7 + ((PH7_Voltage - Voltage) - pH_Slope) + Offset
+    // Formula for pH: pH = PH7 + ((PH7_Voltage - Voltage) / pH_Slope) + Offset
     float phVolt = (float) avgValuePH * 3.3 / 1024 / 6;
     float phValue = 7 + ((1.13-phVolt) / -PHSLOPE) + OFFSET;
   
@@ -292,11 +292,11 @@ void loop()
     delay(10);
   }
 
-  // This will end up offsetting the GPS transmission and sensor data transmission by 30 minutes
-  static unsigned long gpsTimepoint = millis() - 1800000U;
+  // This will end up offsetting the GPS transmission and sensor data transmission by 30 minutes (1 800 000 ms)
+  static unsigned long gpsTimepoint = millis() - 6000U;
 
   // Every 3 600 000 milliseconds (60 minutes) get location data, format it, and transmit it.
-  if(millis() - gpsTimepoint > 3600000U)
+  if(millis() - gpsTimepoint > 12000U)
   {
     gpsTimepoint = millis();
     unsigned char radiopacket[20] = "";
